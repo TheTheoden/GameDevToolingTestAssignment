@@ -167,17 +167,79 @@ namespace MySolution
 
         static void WriteHierarchy(StreamWriter writer, List<string> hierarchy)
         {
-            foreach (var item in hierarchy)
+            var idToName = new Dictionary<int, string>();
+            var idToChildren = new Dictionary<int, List<int>>();
+            var used = new Dictionary<int, bool>();
+            var hasFather = new Dictionary<int, bool>();
+            
+            foreach (var hierarchyString in hierarchy)
             {
-                writer.WriteLine($"{item.Trim()}");
+                var id = ExtractValueFromHierarchy("id", hierarchyString);
+                var name = ExtractStringValueFromHierarchy("name", hierarchyString);
+                var fatherId = ExtractValueFromHierarchy("fatherId", hierarchyString);
+                
+                idToName[id] = name;
+                used[id] = false;
+                hasFather[id] = false;
+                
+                if (fatherId == 0) continue;
+                
+                hasFather[id] = true;
+                
+                if (idToChildren.ContainsKey(fatherId))
+                {
+                    idToChildren[fatherId].Add(id);
+                }
+                else
+                {
+                    var newList = new List<int> { id };
+                    idToChildren.Add(fatherId, newList);
+                }
+                //writer.WriteLine($"{hierarchyString.Trim()}");
             }
+
+            foreach (var kvp in idToName)
+            {
+                var id = kvp.Key;
+                if (hasFather[id]) continue;
+                WriteRecursively(ref writer, id, ref idToChildren, ref used, "", ref idToName);
+            }
+        }
+
+        private static void WriteRecursively(ref StreamWriter writer, int id,
+            ref Dictionary<int, List<int>> idToChildren,
+            ref Dictionary<int, bool> used, string level, ref Dictionary<int, string> idToName)
+        {
+            if (used[id]) return;
+            used[id] = true;
+            writer.WriteLine(level + $"{idToName[id]}");
+            level += "--";
+
+            if (!idToChildren.ContainsKey(id)) return;
+            
+            foreach (var child in idToChildren[id])
+            {
+                WriteRecursively(ref writer, child, ref idToChildren, ref used, level, ref idToName);
+            }
+        }
+        
+        static int ExtractValueFromHierarchy(string key, string hierarchyString)
+        {
+            var match = Regex.Match(hierarchyString, $@"{key}: (\d+)");
+            return match.Success ? int.Parse(match.Groups[1].Value) : 0;
+        }
+
+        static string ExtractStringValueFromHierarchy(string key, string hierarchyString)
+        {
+            var match = Regex.Match(hierarchyString, $@"{key}: (.+?),");
+            return match.Success ? match.Groups[1].Value.Trim() : string.Empty;
         }
 
         static List<string> GetScenePaths(string projectPath)
         {
-            List<string> scenePaths = new List<string>();
-            string[] files = Directory.GetFiles(projectPath, "*.unity", SearchOption.AllDirectories);
-            foreach (string file in files)
+            var scenePaths = new List<string>();
+            var files = Directory.GetFiles(projectPath, "*.unity", SearchOption.AllDirectories);
+            foreach (var file in files)
             {
                 scenePaths.Add(file);
             }
@@ -185,34 +247,73 @@ namespace MySolution
             return scenePaths;
         }
 
-        static List<string> GetSceneHierarchy(string scenePath)
+        private static List<string> GetSceneHierarchy(string scenePath)
         {
-            List<string> sceneHierarchy = new List<string>();
-            string[] lines = File.ReadAllLines(scenePath);
+            var sceneHierarchy = new List<string>();
+            var lines = File.ReadAllLines(scenePath);
             var inGameObject = false;
-
+            var inTransform = false;
+            var gotName = false;
+            var gotId = false;
+            string gameObjectName = null;
+            string gameObjectId = null;
+            
             foreach (var line in lines)
             {
                 if (line.Trim() == "GameObject:")
                 {
                     inGameObject = true;
+                    gotName = false;
+                    gotId = false;
                     continue;
                 }
-
-                if (inGameObject)
+                
+                if (!inGameObject)
                 {
-                    if (line.Trim().StartsWith("m_Name:"))
+                    continue;
+                }
+                
+                if (!inTransform)
+                {
+                    if (line.Trim().StartsWith("Transform:"))
                     {
-                        var gameObjectName = ExtractGameObjectName(line);
-                        if (!string.IsNullOrEmpty(gameObjectName))
+                        inTransform = true;
+                        continue;
+                    }
+
+                    if (!gotId && line.Trim().StartsWith("- component: {fileID: "))
+                    {
+                        gameObjectId = ExtractGameObjectId(line);
+                        if (!string.IsNullOrEmpty(gameObjectId))
                         {
-                            sceneHierarchy.Add(gameObjectName);
+                            gotId = true;
                         }
                     }
+
+                    if (!line.Trim().StartsWith("m_Name:") || gotName) continue;
                     
+                    gameObjectName = ExtractGameObjectName(line);
+                    if (!string.IsNullOrEmpty(gameObjectName))
+                    {
+                        gotName = true;
+                    }
+                    
+                }
+                else
+                {
+                    if (line.Trim().StartsWith("m_Father:"))
+                    {
+                        var fatherId = ExtractFatherId(line);
+                        if (!string.IsNullOrEmpty(fatherId))
+                        {
+                            sceneHierarchy.Add("id: " + gameObjectId + ", name: " + gameObjectName + ", fatherId: " + fatherId);
+                        }
+                    }
+
                     if (line.Trim().StartsWith("--- !u"))
                     {
                         inGameObject = false;
+                        inTransform = false;
                     }
                 }
             }
@@ -220,9 +321,31 @@ namespace MySolution
             return sceneHierarchy;
         }
 
-        static string ExtractGameObjectName(string line)
+        private static string ExtractGameObjectName(string line)
         {
             return line.Substring(line.IndexOf("m_Name:") + 8).Trim();
+        }
+        
+        private static string ExtractGameObjectId(string line)
+        {
+            var match = Regex.Match(line, @"fileID: (\d+)");
+            if (match.Success)
+            {
+                return match.Groups[1].Value;
+            }
+            return null;
+        }
+        
+        private static string ExtractFatherId(string input)
+        {
+            var match = Regex.Match(input, @"fileID: (\d+)");
+
+            if (match.Success)
+            {
+                return match.Groups[1].Value;
+            }
+
+            return null;
         }
     }
 }
